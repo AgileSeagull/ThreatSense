@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.env/
+*.egg-info/
+.eggs/
+*.egg
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.tox/
+
+# IDE & editor
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs & local env
+*.log
+logs/
+.env
+.env.local
+.env.*.local
+
+# Node / dashboard (root-level; dashboard/ has its own)
+node_modules/
+
+# Build / output
+dist/
+dist-ssr/
+*.local
+
+# Optional: large or generated data (uncomment if you don’t want to track)
+# data/models/*.joblib

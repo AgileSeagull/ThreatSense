@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://threat-detection.local/schemas/event.json",
+  "title": "ActivityEvent",
+  "description": "Unified schema for auth, command, and process events from endpoint agents",
+  "type": "object",
+  "required": ["event_type", "machine_id", "user", "timestamp", "source"],
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": ["auth", "command", "process"],
+      "description": "Category of the event"
+    },
+    "machine_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable machine identifier (e.g. from /etc/machine-id)"
+    },
+    "user": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Username associated with the activity"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of the activity"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["auth", "command", "process"],
+      "description": "Source collector that produced this event"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Type-specific event data"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "source": { "const": "auth" } }, "required": ["source"] },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "action": { "type": "string", "enum": ["login", "logout", "sudo", "failure"] },
+              "service": { "type": "string" },
+              "remote_host": { "type": "string" },
+              "success": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "source": { "const": "command" } }, "required": ["source"] },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["command_hash"],
+            "properties": {
+              "command_hash": { "type": "string", "description": "SHA-256 hash of normalized command (privacy-preserving)" },
+              "command_length": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "source": { "const": "process" } }, "required": ["source"] },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "pid": { "type": "integer" },
+              "exe": { "type": "string" },
+              "argv": { "type": "array", "items": { "type": "string" } },
+              "parent_pid": { "type": "integer" },
+              "start_time": { "type": "number" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

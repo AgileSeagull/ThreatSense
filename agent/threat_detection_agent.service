@@ -1,0 +1,15 @@
+[Unit]
+Description=Threat Detection Endpoint Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m agent.main
+WorkingDirectory=/opt/threat_detection_agent
+Environment=AGENT_ENDPOINT_URL=http://localhost:8000/api/v1/events
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

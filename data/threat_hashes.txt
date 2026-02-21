@@ -1,0 +1,5 @@
+# SHA-256 of normalized command (strip, lowercase, collapse spaces). One hash per line.
+# Example: rm -rf /
+5c7923bd67b06c93279d49c466301c57023822eec29c49e269063e47aecd973c
+# Example: curl | bash
+5e7f6088938ab148fc0e2a748e099ad121c43d5042918bed57fb9dee269239f6

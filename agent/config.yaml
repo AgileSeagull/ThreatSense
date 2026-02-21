@@ -1,0 +1,11 @@
+# Endpoint Agent config (overridable via env AGENT_*)
+# Agent and engine both on this machine; engine at localhost:8000
+endpoint_url: "http://localhost:8000/api/v1/events"
+batch_size: 50
+send_interval_seconds: 30
+log_level: "INFO"
+# Optional: paths for shell history (per-user, agent may run as root and read /home/*)
+history_glob: "/home/*/.bash_history"
+# Auth log: use "journalctl" or "file"
+auth_source: "auto"
+auth_log_path: "/var/log/auth.log"
