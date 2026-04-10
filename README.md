@@ -9,6 +9,7 @@ A full-stack system that detects anomalous user behavior on Linux endpoints and 
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Components](#components)
+- [Hardware sensors](#hardware-sensors)
 - [Prerequisites](#prerequisites)
 - [Quick start](#quick-start)
 - [Running with Docker](#running-with-docker)
@@ -25,45 +26,58 @@ A full-stack system that detects anomalous user behavior on Linux endpoints and 
 
 ## Overview
 
-The system has three main parts:
+The system has four main parts:
 
 | Component | Role |
 |-----------|------|
 | **Endpoint Agent** | Runs on Linux hosts; collects auth logs, shell commands (as hashes only), and process execution; buffers and sends events to the engine with retry/backoff. |
-| **Detection Engine** | FastAPI service that receives events, runs hash-based PSI (threat-command check), unsupervised ML (Isolation Forest), and XAI (human-readable explanations); stores raw events, processed events, and alerts in PostgreSQL. |
-| **Web Dashboard** | React + TypeScript + Vite app that shows alerts, risk scores, explanations, and an activity timeline with filtering; proxies `/api` to the engine. |
+| **Hardware Sensors** | Physical IoT sensors (MPU-6050 gyroscope/accelerometer, HW-485 sound sensor, HW-509 magnetic sensor) attached to monitored hardware; readings are sent directly to the engine as `sensor` events. |
+| **Detection Engine** | FastAPI service that receives events from both the endpoint agent and hardware sensors, runs hash-based PSI (threat-command check), unsupervised ML (Isolation Forest), and XAI (human-readable explanations); stores raw events, processed events, and alerts in PostgreSQL. |
+| **Web Dashboard** | React + TypeScript + Vite app that shows alerts, risk scores, explanations, sensor readings, and an activity timeline with filtering; proxies `/api` to the engine. |
 
-**Data flow (high level):** Agent → `POST /api/v1/events` → Engine (PSI → ML → XAI) → DB → Dashboard (Alerts, Activity, raw events).
+**Data flow (high level):**
+- Agent → `POST /api/v1/events` → Engine (PSI → ML → XAI) → DB → Dashboard
+- Hardware sensors → `POST /api/v1/events` → Engine (ML → XAI) → DB → Dashboard (Sensors page)
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────┐     POST /api/v1/events      ┌──────────────────────────────────────┐
-│  Linux host(s)  │ ──────────────────────────► │  Detection Engine (FastAPI)           │
-│                 │                              │  • Ingest & validate (event schema)   │
+┌─────────────────┐                              ┌──────────────────────────────────────┐
+│  Linux host(s)  │  POST /api/v1/events         │  Detection Engine (FastAPI)           │
+│                 │ ──────────────────────────► │  • Ingest & validate (event schema)   │
 │  • Auth log     │                              │  • PSI: command_hash ∈ threat DB?     │
 │  • Bash history │                              │  • ML: Isolation Forest anomaly score │
 │  • Process list │                              │  • XAI: explanation text              │
-│                 │                              │  • Store: raw_event, processed_event,  │
-│  Agent          │                              │         alert (if risk ≥ threshold)    │
+│  Agent          │                              │  • Store: raw_event, processed_event, │
+└─────────────────┘                              │         alert (if risk ≥ threshold)   │
+                                                 │                                       │
+┌─────────────────┐                              │  Sensor pipeline:                     │
+│ Hardware sensors│  POST /api/v1/events         │  • Validate sensor payload            │
+│                 │ ──────────────────────────► │  • Extract features (accel, gyro,     │
+│  • MPU-6050     │                              │    trigger, sensor_type, time, etc.)  │
+│    gyro/accel   │                              │  • ML: Isolation Forest risk score    │
+│  • HW-485 sound │                              │  • XAI: explanation + anomaly reason  │
+│  • HW-509 magnet│                              │  • Alert if risk ≥ threshold          │
 └─────────────────┘                              └──────────────────┬───────────────────┘
                                                                      │
                                                                      ▼
 ┌─────────────────┐     GET /api/v1/alerts       ┌──────────────────────────────────────┐
 │  Web Dashboard  │ ◄────────────────────────── │  PostgreSQL                           │
-│  (React + Vite) │     GET /api/v1/activity     │  • raw_events, processed_events,       │
-│                 │     GET /api/v1/events      │    alerts, threat_hashes, machines,   │
-│  • Alerts list  │                              │    users                               │
+│  (React + Vite) │     GET /api/v1/activity     │  • raw_events, processed_events,      │
+│                 │     GET /api/v1/events       │    alerts, threat_hashes, machines,   │
+│  • Alerts list  │                              │    users                              │
 │  • Activity     │                              │  • Persisted model: global_model.joblib│
 │  • Risk & XAI   │                              └──────────────────────────────────────┘
+│  • Sensors page │
 └─────────────────┘
 ```
 
 - **PSI (Private Set Intersection):** Commands are sent only as SHA-256 hashes; the server never sees raw command text. The engine checks each `command_hash` against a threat database (file + DB table).
 - **ML:** For events not in the threat set, the engine extracts features (time, source, user/machine buckets, command hash bucket, etc.) and scores them with a global Isolation Forest. Risk is mapped to 0–100; scores above the configured threshold create an alert.
 - **XAI:** Every processed event gets a short explanation (e.g. “Known malicious command” for PSI hits, or “Highly anomalous activity…” with contributing factors for ML anomalies).
+- **Sensor pipeline:** Sensor events bypass PSI (no command hash) and go directly to ML feature extraction and scoring. Sensor features include accelerometer/gyroscope axes, trigger state, sensor type encoding, and temporal features.
 
 ---
 
@@ -90,12 +104,127 @@ The system has three main parts:
 ### Web Dashboard (`dashboard/`)
 
 - **Stack:** React, TypeScript, Vite; Recharts for charts; proxy `/api` to engine.
-- **Pages:** Dashboard (overview), Alerts (list/detail), Activity (timeline), with filters (machine, user, time range, risk).
-- **Features:** Risk badges, explanation blocks, timeline strip; auto-refresh for live view.
+- **Pages:** Dashboard (overview), Alerts (list/detail), Activity (timeline), Sensors (live sensor readings and risk), with filters (machine, user, time range, risk).
+- **Features:** Risk badges, explanation blocks, timeline strip, sensor charts (line chart for gyro axes, bar chart for risk); auto-refresh for live view.
 
 ### Shared (`shared/`)
 
-- **Event schema:** `event_schema.json` defines the unified activity event format (event_type, machine_id, user, timestamp, source, payload). Agent and engine both validate against it; command events require normalized `command_hash` (see [Threat hashes (PSI)](#threat-hashes-psi)).
+- **Event schema:** `event_schema.json` defines the unified activity event format (event_type, machine_id, user, timestamp, source, payload). Agent, sensors, and engine all validate against it; command events require normalized `command_hash` (see [Threat hashes (PSI)](#threat-hashes-psi)).
+
+---
+
+## Hardware sensors
+
+The system supports three physical IoT sensors that report environmental and physical state. Sensor events are sent as `POST /api/v1/events` with `event_type: "sensor"` and `source: "sensor"`.
+
+### MPU-6050 — Gyroscope / Accelerometer (`sensor_type: "gyro"`)
+
+3-axis accelerometer (g) and 3-axis gyroscope (°/s) attached to monitored hardware.
+
+| Field | Unit | Normal range |
+|-------|------|--------------|
+| `ax` | g | ~0 (stationary) |
+| `ay` | g | ~0 (stationary) |
+| `az` | g | ~9.81 (upright) |
+| `gx` | °/s | ~0 (no rotation) |
+| `gy` | °/s | ~0 (no rotation) |
+| `gz` | °/s | ~0 (no rotation) |
+
+**Anomaly scenarios detected:**
+
+| Scenario | Description |
+|----------|-------------|
+| `impact_detected` | Sudden high-g spike — possible physical tampering or collision |
+| `freefall` | Near-zero gravity on all axes — device detached or dropped |
+| `sustained_vibration` | Persistent high-frequency vibration — motor fault or structural resonance |
+| `tilt_anomaly` | Device tilted beyond safe angle — mounting may have shifted |
+
+### HW-485 — Big Sound Sensor (`sensor_type: "sound"`)
+
+Binary trigger sensor. `triggered: true` means a loud sound threshold was exceeded.
+
+| Anomaly reason | Scenario |
+|----------------|----------|
+| Loud sound burst | Possible glass break or explosion |
+| Sustained loud noise | Possible alarm or machinery malfunction |
+| Repeated triggers in short interval | Possible intrusion attempt |
+
+### HW-509 — Magnetic Sensor (`sensor_type: "magnetic"`)
+
+Binary trigger sensor mounted on enclosures or doors. `triggered: true` means a magnetic field change was detected.
+
+| Anomaly reason | Scenario |
+|----------------|----------|
+| Magnetic field change | Door or enclosure may have been opened |
+| Strong magnetic interference | Possible magnet-based tampering |
+| Triggered in restricted hours | Unauthorized physical access |
+
+### Sensor data flow
+
+```
+Physical sensor reading
+        │
+        ▼
+POST /api/v1/events  (event_type="sensor", source="sensor")
+        │
+        ▼
+Engine ingests RawEvent
+        │
+        ▼
+Feature extraction:
+  hour, dow, sensor_type_enc,
+  ax, ay, az (clipped to ±1 at ±16 g),
+  gx, gy, gz (clipped to ±1 at ±2000 °/s),
+  triggered (0.0 / 1.0)
+        │
+        ▼
+Isolation Forest scores event → risk 0–100
+        │
+        ▼
+XAI builds explanation
+  • payload.reason from sensor (pre-classified)
+  • ML contributing factors (axis deviations, trigger state)
+        │
+        ├── risk ≥ threshold → Alert created → Dashboard Alerts page
+        └── always → ProcessedEvent → Dashboard Sensors + Activity pages
+```
+
+### Running the sensor simulator
+
+The simulator generates realistic sensor readings and streams them to the engine:
+
+```bash
+pip install requests
+python scripts/sensor_simulator.py                         # defaults: localhost:8000, 2-second interval
+python scripts/sensor_simulator.py --url http://<host>:8000/api/v1/events --interval 1.0
+python scripts/sensor_simulator.py --api-key <key> --machine-id <uuid>
+```
+
+Each cycle sends one gyro reading, one sound reading, and one magnetic reading. Approximately 15% of gyro and sound events and 10% of magnetic events are randomly generated as unsafe anomalies.
+
+### Sending sensor data directly
+
+```bash
+curl -X POST http://localhost:8000/api/v1/events \
+  -H "Content-Type: application/json" \
+  -d '[{
+    "event_type": "sensor",
+    "machine_id": "a3f1b2c4-1234-5678-abcd-ef0123456789",
+    "user": "system",
+    "timestamp": "2026-04-10T10:00:00Z",
+    "source": "sensor",
+    "payload": {
+      "sensor_id": "mpu-6050-01",
+      "sensor_type": "gyro",
+      "ax": 0.02, "ay": -0.01, "az": 9.81,
+      "gx": 0.5,  "gy": -0.3,  "gz": 0.1,
+      "status": "safe",
+      "reason": "Normal orientation and motion — readings within expected range"
+    }
+  }]'
+```
+
+See [docs/sensor_schema.md](docs/sensor_schema.md) for the full sensor payload schema and example payloads for all three sensor types.
 
 ---
 
@@ -291,6 +420,17 @@ python scripts/demo_agents.py
 
 Set `ENGINE_URL` and optionally `ENGINE_API_KEY`. The script runs three demo agents that send auth, command, and process events every few seconds; the dashboard and Alerts/Activity pages can auto-refresh (e.g. every 5 seconds).
 
+### Sensor simulator
+
+Stream live sensor data from the three hardware sensor types:
+
+```bash
+pip install requests
+python scripts/sensor_simulator.py
+```
+
+Each cycle (default 2 seconds) emits one gyro, one sound, and one magnetic reading with ~15% anomaly probability. The Sensors page in the dashboard auto-refreshes to show live risk scores and charts. See [Hardware sensors](#hardware-sensors) for full usage options.
+
 ### Force model file creation
 
 Create the persisted anomaly model on disk without running demo agents:
@@ -310,7 +450,7 @@ Base path: `/api/v1`. If `ENGINE_API_KEY` is set, send `Authorization: Bearer <k
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/events` | Ingest event batch (from agents). Body: JSON array of activity events (see `shared/event_schema.json`). |
+| `POST` | `/events` | Ingest event batch (from agents or sensors). Body: JSON array of activity events (see `shared/event_schema.json`). Supports `event_type`: `auth`, `command`, `process`, `sensor`. |
 | `GET`  | `/alerts` | List alerts. Query params: `machine_id`, `user`, `since`, `until`, `risk_min`, `limit`. |
 | `GET`  | `/activity` | List processed events. Same query params as alerts. |
 | `GET`  | `/events` | List raw events. Same query params. |
@@ -404,9 +544,13 @@ threat_detection/
 ├── data/
 │   ├── threat_hashes.txt     # One threat hash per line (optional; can use API only)
 │   └── models/               # global_model.joblib (persisted Isolation Forest)
+├── docs/
+│   └── sensor_schema.md      # Sensor event schema reference
 ├── scripts/
 │   ├── seed_events.sh        # One-time sample events
-│   ├── demo_agents.py        # Continuous demo agents
+│   ├── demo_agents.py        # Continuous demo agents (auth, command, process)
+│   ├── sensor_simulator.py   # Real-time IoT sensor data simulator
+│   ├── clear_sensor_data.py  # Clear sensor events from the database
 │   └── force_model_create.py # Create global_model.joblib
 ├── docker-compose.yml        # Postgres, engine, dashboard
 ├── start                     # ./start — start stack with Docker Compose

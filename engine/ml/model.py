@@ -12,17 +12,23 @@ logger = logging.getLogger(__name__)
 MODEL_VERSION = "iforest_v1"
 
 
-def _anomaly_to_risk(anomaly_score: float) -> float:
-    """Map Isolation Forest anomaly score (-1 or 1 / decision_function) to 0-100 risk."""
-    # decision_function: negative = more anomalous. We use score_samples -> lower = more anomalous.
-    # IsolationForest score_samples: -0.5 ish = normal, lower = anomaly. Clamp and scale to 0-100.
+def _anomaly_to_risk(anomaly_score: float, offset: float = -0.5) -> float:
+    """Map Isolation Forest score_samples to 0-100 risk using the model's own offset_.
+
+    IsolationForest.offset_ is the decision threshold: scores above it are inliers
+    (normal), scores below it are outliers (anomalous). Using offset_ as the pivot
+    means normal training data always lands near 0 regardless of the dataset.
+    """
     if np.isnan(anomaly_score):
         return 0.0
-    # Typical range roughly [-0.6, -0.4]. More negative -> higher risk.
-    low, high = -0.6, -0.2
-    p = (anomaly_score - high) / (low - high) if low != high else 0.5
-    p = max(0.0, min(1.0, p))
-    return float(p * 100.0)
+    if anomaly_score >= offset:
+        # Inlier — well within normal range.
+        return 0.0
+    # Outlier — scale distance below offset linearly to 10-100.
+    # 0.25 units below offset = fully anomalous (risk 100).
+    distance = offset - anomaly_score
+    p = min(1.0, distance / 0.25)
+    return float(10.0 + p * 90.0)
 
 
 class AnomalyModel:
@@ -47,7 +53,8 @@ class AnomalyModel:
     def risk_scores(self, X: np.ndarray) -> list[float]:
         """Return 0-100 risk per sample."""
         s = self.score(X)
-        return [_anomaly_to_risk(float(s[i])) for i in range(len(s))]
+        offset = float(self.clf.offset_) if self._fitted else -0.5
+        return [_anomaly_to_risk(float(s[i]), offset) for i in range(len(s))]
 
     def save(self, path: Path) -> None:
         path = Path(path)

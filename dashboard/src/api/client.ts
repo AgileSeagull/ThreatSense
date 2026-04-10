@@ -10,7 +10,11 @@ async function get<T>(path: string, params?: Record<string, string | number | un
     });
   }
   const r = await fetch(url.toString());
-  if (!r.ok) throw new Error(`API ${r.status}: ${await r.text()}`);
+  if (!r.ok) {
+    const text = await r.text();
+    const isHtml = text.trimStart().startsWith('<');
+    throw new Error(`API ${r.status}: ${isHtml ? r.statusText || 'Backend unavailable' : text}`);
+  }
   return r.json();
 }
 

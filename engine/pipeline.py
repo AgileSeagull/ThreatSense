@@ -38,6 +38,41 @@ def _ensure_global_model(db: Session) -> None:
         reg.save_global()
 
 
+_SUSPICIOUS_EXE = ["/tmp/", "/var/tmp/", "/dev/shm/", "/usr/bin/nc", "/bin/nc",
+                   "miner", "xmrig", "backdoor", "netcat", "reverse"]
+
+
+def _rule_based_risk(raw: RawEvent) -> tuple[float, list[str]] | None:
+    """
+    Score events that match known threat patterns with explicit rules.
+    Returns (risk_score, contributing_factors) or None if no rule matches.
+    Rules complement the Isolation Forest: they catch patterns the unsupervised
+    model can't reliably separate (auth failures, suspicious executables, etc.).
+    """
+    payload = raw.payload or {}
+
+    # Auth failure
+    if raw.source == "auth" and payload.get("success") is False:
+        action = payload.get("action", "failure")
+        service = payload.get("service", "unknown")
+        return 75.0, [f"auth_failure ({action})", f"failed_service ({service})"]
+
+    # Suspicious process executable
+    if raw.source == "process":
+        exe = payload.get("exe", "")
+        if any(s in exe for s in _SUSPICIOUS_EXE):
+            return 92.0, [f"suspicious_executable ({exe})", "known_threat_pattern"]
+
+    # Unusually long command (obfuscated or encoded payload)
+    if raw.source == "command":
+        cmd_len = payload.get("command_length") or 0
+        if cmd_len > 200:
+            score = min(95.0, 50.0 + (cmd_len / 1024.0) * 45.0)
+            return score, [f"unusual_command_length ({cmd_len} chars)", "possible_obfuscation"]
+
+    return None
+
+
 def get_psi_checker(db: Session) -> PSIChecker:
     """Build PSIChecker with hashes from DB and optional file."""
     settings = get_settings()
@@ -67,13 +102,18 @@ def process_raw_event(db: Session, raw: RawEvent, psi: PSIChecker) -> None:
                 model_version = "psi_v1"
 
     if not in_threat:
-        _ensure_global_model(db)
-        reg = get_registry()
-        event_dict = raw_event_to_dict(raw)
-        ml_risk, factors = reg.score_event(event_dict)
-        risk_score = ml_risk
-        contributing_factors = factors
-        model_version = MODEL_VERSION
+        rule_result = _rule_based_risk(raw)
+        if rule_result is not None:
+            risk_score, contributing_factors = rule_result
+            model_version = "rules_v1"
+        else:
+            _ensure_global_model(db)
+            reg = get_registry()
+            event_dict = raw_event_to_dict(raw)
+            ml_risk, factors = reg.score_event(event_dict)
+            risk_score = ml_risk
+            contributing_factors = factors
+            model_version = MODEL_VERSION
 
     event_context = {
         "event_type": raw.event_type,

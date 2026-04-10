@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -8,12 +9,15 @@ from engine.models.raw_event import RawEvent
 from engine.api.auth import require_api_key
 from engine.pipeline import get_psi_checker, process_raw_event
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/events", tags=["events"], dependencies=[Depends(require_api_key)])
 
 
 @router.post("", response_model=EventsIngestResponse)
 def ingest_events(events: list[EventIn], db: Session = Depends(get_db_session)):
     """Accept a batch of activity events. Store raw events, run PSI, write processed_events and alerts."""
+    logger.info("Ingesting batch of %d event(s)", len(events))
     accepted = 0
     rejected = 0
     now = datetime.now(timezone.utc)
@@ -34,8 +38,10 @@ def ingest_events(events: list[EventIn], db: Session = Depends(get_db_session)):
             process_raw_event(db, raw, psi)
             accepted += 1
         except Exception:
+            logger.exception("Failed to process event type=%s machine=%s", ev.event_type, ev.machine_id)
             rejected += 1
     db.commit()
+    logger.info("Batch complete: accepted=%d rejected=%d", accepted, rejected)
     return EventsIngestResponse(
         accepted=accepted,
         rejected=rejected,

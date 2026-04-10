@@ -19,6 +19,7 @@ def list_activity(
     since: datetime | None = None,
     until: datetime | None = None,
     risk_min: float | None = None,
+    event_type: str | None = None,
     limit: int = Query(100, ge=1, le=1000),
 ):
     """Timeline of processed events (activity) with optional filters."""
@@ -33,5 +34,7 @@ def list_activity(
         q = q.filter(ProcessedEvent.timestamp <= until)
     if risk_min is not None:
         q = q.filter(ProcessedEvent.risk_score >= risk_min)
+    if event_type:
+        q = q.filter(ProcessedEvent.event_type == event_type)
     rows = q.limit(limit).all()
     return [ProcessedEventOut.model_validate(r) for r in rows]

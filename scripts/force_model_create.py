@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
-Force creation of the persisted global anomaly model (data/models/global_model.joblib).
-Sends enough benign events to the engine so it fits the Isolation Forest and saves it to disk.
-Requires: engine running, ENGINE_URL (default http://localhost:8000), optional ENGINE_API_KEY.
+Retrain the global anomaly model (data/models/global_model.joblib) on clean normal data.
+
+The Isolation Forest learns what "normal" looks like from its training data.
+This script sends a large batch of purely normal events — matching the same
+templates used by demo_agents.py — so the model learns the correct baseline.
+After this runs, normal events score near 0 and real threats score high.
+
 Usage: python scripts/force_model_create.py
 """
 import os
@@ -24,8 +28,39 @@ ENGINE_URL = os.environ.get("ENGINE_URL", "http://localhost:8000")
 API_KEY = os.environ.get("ENGINE_API_KEY", "")
 EVENTS_ENDPOINT = f"{ENGINE_URL.rstrip('/')}/api/v1/events"
 
-# Need at least 30 events for fit_global(); send 45 so we're safely over.
-NUM_EVENTS = 45
+# Send enough events so the Isolation Forest gets a solid normal baseline.
+# More samples = tighter boundary = clearer separation between normal and threat.
+NUM_EVENTS = 200
+BATCH_SIZE = 50  # send in batches to avoid timeout
+
+# ── Normal templates (must stay in sync with demo_agents.py NORMAL_* pools) ──
+
+NORMAL_AUTH = [
+    {"action": "login",  "service": "sshd",  "success": True},
+    {"action": "login",  "service": "sudo",  "success": True},
+    {"action": "login",  "service": "pam",   "success": True},
+    {"action": "logout", "service": "sshd",  "success": True},
+    {"action": "logout", "service": "sudo",  "success": True},
+    {"action": "logout", "service": "pam",   "success": True},
+]
+
+# Short lengths keep cmd_len feature (÷500) near 0
+NORMAL_COMMAND_LENGTHS = [5, 8, 12, 18, 25, 30]
+
+NORMAL_PROCESS_EXES = [
+    ("/usr/bin/bash",    ["bash"]),
+    ("/usr/bin/python3", ["python3", "-m", "agent.main"]),
+    ("/usr/bin/git",     ["git", "pull"]),
+    ("/usr/bin/ls",      ["ls", "-la"]),
+    ("/usr/bin/curl",    ["curl", "https://example.com"]),
+    ("/usr/bin/systemd", ["systemd", "--user"]),
+    ("/usr/bin/vim",     ["vim", "config.yaml"]),
+    ("/usr/bin/ssh",     ["ssh", "deploy@prod"]),
+]
+
+MACHINES = ["demo-laptop-01", "demo-server-02", "demo-workstation-03",
+            "train-host-01", "train-host-02"]
+USERS = ["alice", "bob", "ops", "deploy", "root", "monitor", "jordan", "marcus", "dev"]
 
 
 def random_hex_hash() -> str:
@@ -44,57 +79,65 @@ def build_event(machine_id: str, user: str, source: str, payload: dict) -> dict:
     }
 
 
-def generate_benign_events(n: int) -> list[dict]:
-    """Generate n events with only benign command hashes (no threat DB matches)."""
-    machines = ["force-model-host-01", "force-model-host-02"]
-    users = ["alice", "bob", "deploy", "ops"]
+def generate_normal_events(n: int) -> list[dict]:
+    """Generate n purely normal events matching the demo_agents NORMAL_* templates."""
     events = []
     for i in range(n):
-        machine_id = random.choice(machines)
-        user = random.choice(users)
+        machine_id = random.choice(MACHINES)
+        user = random.choice(USERS)
         kind = random.choice(["auth", "command", "process"])
+
         if kind == "auth":
-            payload = {
-                "action": random.choice(["login", "login", "failure"]),
-                "service": "sshd",
-                "success": random.random() > 0.3,
-            }
+            pl = dict(random.choice(NORMAL_AUTH))
+
         elif kind == "command":
-            payload = {
+            pl = {
                 "command_hash": random_hex_hash(),
-                "command_length": random.randint(5, 200),
+                "command_length": random.choice(NORMAL_COMMAND_LENGTHS),
             }
+
         else:
-            payload = {
+            exe, argv = random.choice(NORMAL_PROCESS_EXES)
+            pl = {
                 "pid": 1000 + i,
-                "exe": random.choice(["/usr/bin/bash", "/usr/bin/python3", "/usr/bin/git"]),
-                "argv": ["cmd"],
-                "parent_pid": 1,
-                "start_time": time.time() - random.randint(0, 86400),
+                "exe": exe,
+                "argv": argv,
+                "parent_pid": random.choice([1, 1000]),
+                "start_time": time.time() - random.randint(0, 3600),
             }
-        events.append(build_event(machine_id, user, kind, payload))
+
+        events.append(build_event(machine_id, user, kind, pl))
     return events
 
 
 def main() -> int:
-    print(f"Sending {NUM_EVENTS} benign events to {EVENTS_ENDPOINT} to force model fit and save...")
+    print(f"Retraining anomaly model on {NUM_EVENTS} normal events → {EVENTS_ENDPOINT}")
+    print("This teaches the Isolation Forest what normal looks like so threats stand out.\n")
+
     headers = {"Content-Type": "application/json"}
     if API_KEY:
         headers["Authorization"] = f"Bearer {API_KEY}"
-    events = generate_benign_events(NUM_EVENTS)
-    try:
-        r = requests.post(EVENTS_ENDPOINT, json=events, headers=headers, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        accepted = getattr(data, "accepted", data.get("accepted", 0))
-        print(f"Accepted {accepted} events.")
-        print("If the engine had at least 30 raw events (including these), it should have fitted and saved the model to data/models/global_model.joblib")
-        return 0
-    except requests.RequestException as e:
-        print(f"Request failed: {e}", file=sys.stderr)
-        if hasattr(e, "response") and e.response is not None:
-            print(e.response.text[:500], file=sys.stderr)
-        return 1
+
+    all_events = generate_normal_events(NUM_EVENTS)
+    total_accepted = 0
+
+    for start in range(0, len(all_events), BATCH_SIZE):
+        batch = all_events[start:start + BATCH_SIZE]
+        try:
+            r = requests.post(EVENTS_ENDPOINT, json=batch, headers=headers, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+            accepted = data.get("accepted", len(batch))
+            total_accepted += accepted
+            print(f"  Batch {start // BATCH_SIZE + 1}: sent {len(batch)}, accepted {accepted}")
+        except requests.RequestException as e:
+            print(f"  Batch failed: {e}", file=sys.stderr)
+            return 1
+
+    print(f"\nTotal accepted: {total_accepted} / {NUM_EVENTS}")
+    print("Model retrained. Normal events should now score near 0; threats will score high.")
+    print("Saved to: data/models/global_model.joblib")
+    return 0
 
 
 if __name__ == "__main__":

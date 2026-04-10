@@ -42,5 +42,6 @@ export interface ActivityQuery {
   since?: string;
   until?: string;
   risk_min?: number;
+  event_type?: string;
   limit?: number;
 }

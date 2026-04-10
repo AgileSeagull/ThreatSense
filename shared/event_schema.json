@@ -8,7 +8,7 @@
   "properties": {
     "event_type": {
       "type": "string",
-      "enum": ["auth", "command", "process"],
+      "enum": ["auth", "command", "process", "sensor"],
       "description": "Category of the event"
     },
     "machine_id": {
@@ -28,7 +28,7 @@
     },
     "source": {
       "type": "string",
-      "enum": ["auth", "command", "process"],
+      "enum": ["auth", "command", "process", "sensor"],
       "description": "Source collector that produced this event"
     },
     "payload": {
@@ -80,6 +80,28 @@
               "argv": { "type": "array", "items": { "type": "string" } },
               "parent_pid": { "type": "integer" },
               "start_time": { "type": "number" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "source": { "const": "sensor" } }, "required": ["source"] },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["sensor_id", "sensor_type"],
+            "properties": {
+              "sensor_id":   { "type": "string", "description": "Unique sensor identifier" },
+              "sensor_type": { "type": "string", "enum": ["gyro", "sound", "magnetic"], "description": "MPU-6050 gyro, HW-485 sound, HW-509 magnetic" },
+              "ax": { "type": "number", "description": "MPU-6050 accelerometer X (g)" },
+              "ay": { "type": "number", "description": "MPU-6050 accelerometer Y (g)" },
+              "az": { "type": "number", "description": "MPU-6050 accelerometer Z (g)" },
+              "gx": { "type": "number", "description": "MPU-6050 gyroscope X (°/s)" },
+              "gy": { "type": "number", "description": "MPU-6050 gyroscope Y (°/s)" },
+              "gz": { "type": "number", "description": "MPU-6050 gyroscope Z (°/s)" },
+              "triggered": { "type": "boolean", "description": "HW-485 sound / HW-509 magnetic binary trigger" }
             }
           }
         }

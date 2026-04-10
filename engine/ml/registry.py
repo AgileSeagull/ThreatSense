@@ -167,4 +167,12 @@ class ModelRegistry:
         if name == "command_length_norm":
             length = payload.get("command_length", 0)
             return f"unusual_command_length ({length} chars)"
+        if name == "sensor_type":
+            return f"sensor_type ({payload.get('sensor_type', 'unknown')})"
+        if name in ("ax", "ay", "az"):
+            return f"unusual_accel_{name} ({payload.get(name, 0):.2f} g)"
+        if name in ("gx", "gy", "gz"):
+            return f"unusual_gyro_{name} ({payload.get(name, 0):.1f} deg/s)"
+        if name == "triggered":
+            return "sensor_triggered" if payload.get("triggered") else "sensor_not_triggered"
         return name

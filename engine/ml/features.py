@@ -28,16 +28,28 @@ def extract_features(event: dict[str, Any], payload: dict | None = None) -> np.n
     hour = dt.hour / 24.0
     dow = dt.weekday() / 7.0
     source = event.get("source", "")
-    source_enc = {"auth": 0.0, "command": 0.33, "process": 0.66}.get(source, 0.5)
+    source_enc = {"auth": 0.0, "command": 0.25, "process": 0.5, "sensor": 0.75}.get(source, 0.5)
     cmd_hash_bucket = _hash_bucket(payload.get("command_hash") or "none", 500) / 500.0
     exe_bucket = _hash_bucket(payload.get("exe") or "none", 200) / 200.0
     action_bucket = _hash_bucket(str(payload.get("action", "none")), 20) / 20.0
     user_bucket = _hash_bucket(event.get("user", "unknown"), 100) / 100.0
     machine_bucket = _hash_bucket(event.get("machine_id", "unknown"), 50) / 50.0
     cmd_len = min((payload.get("command_length") or 0) / 500.0, 1.0)
+    # sensor features (MPU-6050 gyro, HW-485 sound, HW-509 magnetic)
+    sensor_type_enc = {"gyro": 0.33, "sound": 0.66, "magnetic": 1.0}.get(
+        payload.get("sensor_type", ""), 0.0
+    )
+    ax = np.clip(float(payload.get("ax") or 0) / 16.0, -1.0, 1.0)
+    ay = np.clip(float(payload.get("ay") or 0) / 16.0, -1.0, 1.0)
+    az = np.clip(float(payload.get("az") or 0) / 16.0, -1.0, 1.0)
+    gx = np.clip(float(payload.get("gx") or 0) / 2000.0, -1.0, 1.0)
+    gy = np.clip(float(payload.get("gy") or 0) / 2000.0, -1.0, 1.0)
+    gz = np.clip(float(payload.get("gz") or 0) / 2000.0, -1.0, 1.0)
+    triggered = 1.0 if payload.get("triggered") else 0.0
     return np.array([
         hour, dow, source_enc, cmd_hash_bucket, exe_bucket,
         action_bucket, user_bucket, machine_bucket, cmd_len,
+        sensor_type_enc, ax, ay, az, gx, gy, gz, triggered,
     ], dtype=np.float64)
 
 
@@ -45,6 +57,7 @@ def get_feature_names() -> list[str]:
     return [
         "hour", "dow", "source", "command_hash_bucket", "exe_bucket",
         "auth_action_bucket", "user_bucket", "machine_bucket", "command_length_norm",
+        "sensor_type", "ax", "ay", "az", "gx", "gy", "gz", "triggered",
     ]
 
 

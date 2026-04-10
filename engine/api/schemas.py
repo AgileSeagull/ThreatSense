@@ -4,25 +4,40 @@ from pydantic import BaseModel, Field
 
 class EventPayload(BaseModel):
     """Type-specific payload; validation relaxed for flexibility."""
+    # auth
     action: str | None = None
     service: str | None = None
     remote_host: str | None = None
     success: bool | None = None
+    # command
     command_hash: str | None = None
     command_length: int | None = None
+    # process
     pid: int | None = None
     exe: str | None = None
     argv: list[str] | None = None
     parent_pid: int | None = None
     start_time: float | None = None
+    # sensor (IoT) — common
+    sensor_id: str | None = None    # unique sensor identifier
+    sensor_type: str | None = None  # "gyro" | "sound" | "magnetic"
+    # MPU-6050 gyro: 3-axis accelerometer + 3-axis gyroscope
+    ax: float | None = None
+    ay: float | None = None
+    az: float | None = None
+    gx: float | None = None
+    gy: float | None = None
+    gz: float | None = None
+    # HW-485 (sound) / HW-509 (magnetic): binary trigger
+    triggered: bool | None = None
 
 
 class EventIn(BaseModel):
-    event_type: str = Field(..., pattern="^(auth|command|process)$")
+    event_type: str = Field(..., pattern="^(auth|command|process|sensor)$")
     machine_id: str = Field(..., min_length=1)
     user: str = Field(..., min_length=1)
     timestamp: datetime
-    source: str = Field(..., pattern="^(auth|command|process)$")
+    source: str = Field(..., pattern="^(auth|command|process|sensor)$")
     payload: dict | None = None
 
 
