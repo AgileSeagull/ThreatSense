@@ -44,9 +44,9 @@ The system has four main parts:
 ## Architecture
 
 ```
-┌─────────────────┐                              ┌──────────────────────────────────────┐
+┌─────────────────┐                              ┌───────────────────────────────────────┐
 │  Linux host(s)  │  POST /api/v1/events         │  Detection Engine (FastAPI)           │
-│                 │ ──────────────────────────► │  • Ingest & validate (event schema)   │
+│                 │ ──────────────────────────►  │  • Ingest & validate (event schema)   │
 │  • Auth log     │                              │  • PSI: command_hash ∈ threat DB?     │
 │  • Bash history │                              │  • ML: Isolation Forest anomaly score │
 │  • Process list │                              │  • XAI: explanation text              │
@@ -55,21 +55,21 @@ The system has four main parts:
                                                  │                                       │
 ┌─────────────────┐                              │  Sensor pipeline:                     │
 │ Hardware sensors│  POST /api/v1/events         │  • Validate sensor payload            │
-│                 │ ──────────────────────────► │  • Extract features (accel, gyro,     │
+│                 │ ──────────────────────────►  │  • Extract features (accel, gyro,     │
 │  • MPU-6050     │                              │    trigger, sensor_type, time, etc.)  │
 │    gyro/accel   │                              │  • ML: Isolation Forest risk score    │
 │  • HW-485 sound │                              │  • XAI: explanation + anomaly reason  │
 │  • HW-509 magnet│                              │  • Alert if risk ≥ threshold          │
-└─────────────────┘                              └──────────────────┬───────────────────┘
+└─────────────────┘                              └──────────────────┬────────────────────┘
                                                                      │
                                                                      ▼
-┌─────────────────┐     GET /api/v1/alerts       ┌──────────────────────────────────────┐
-│  Web Dashboard  │ ◄────────────────────────── │  PostgreSQL                           │
-│  (React + Vite) │     GET /api/v1/activity     │  • raw_events, processed_events,      │
-│                 │     GET /api/v1/events       │    alerts, threat_hashes, machines,   │
-│  • Alerts list  │                              │    users                              │
-│  • Activity     │                              │  • Persisted model: global_model.joblib│
-│  • Risk & XAI   │                              └──────────────────────────────────────┘
+┌─────────────────┐     GET /api/v1/alerts       ┌─────────────────────────────────────────┐
+│  Web Dashboard  │ ◄──────────────────────────  │  PostgreSQL                             │
+│  (React + Vite) │     GET /api/v1/activity     │  • raw_events, processed_events,        │
+│                 │     GET /api/v1/events       │    alerts, threat_hashes, machines,     │
+│  • Alerts list  │                              │    users                                │
+│  • Activity     │                              │  • Persisted model: global_model.joblib │
+│  • Risk & XAI   │                              └─────────────────────────────────────────┘
 │  • Sensors page │
 └─────────────────┘
 ```
